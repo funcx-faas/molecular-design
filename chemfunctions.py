@@ -1,7 +1,5 @@
 """Functions used to perform chemistry tasks """
 import os
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial, update_wrapper
 from typing import List
 from io import StringIO
 
@@ -12,17 +10,10 @@ from ase.optimize import LBFGSLineSearch
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
 from xtb.ase.calculator import XTB
+
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
-
-
-# Make a global pool for this particular Python thread
-#  Not a great practice, as it will not exit until Python does.
-#  Useful on HPC as it limits the number of times we call `fork`
-#   and we know the nodes where this run will get purged after tasks complete
-n_workers = max(len(os.sched_getaffinity(0)) - 1, 1)  # Get as many threads as we are assigned to
-_pool = ProcessPoolExecutor(max_workers=n_workers)
 
 """SIMULATION FUNCTIONS: Quantum chemistry parts of the workflow"""
 def generate_initial_xyz(mol_string: str) -> str:
@@ -92,6 +83,7 @@ def compute_vertical(smiles: str) -> float:
 
 
 """MACHINE LEARNING FUNCTIONS: Predicting the output of quantum chemistry"""
+
 def compute_morgan_fingerprints(smiles: str, fingerprint_length: int, fingerprint_radius: int):
     """Get Morgan Fingerprint of a specific SMILES string.
     Adapted from: <https://github.com/google-research/google-research/blob/
@@ -109,7 +101,7 @@ def compute_morgan_fingerprints(smiles: str, fingerprint_length: int, fingerprin
     # Compute the fingerprint
     fingerprint = AllChem.GetMorganFingerprintAsBitVect(
         molecule, fingerprint_radius, fingerprint_length)
-    arr = np.zeros((1,), dtype=np.bool)
+    arr = np.zeros((1,), dtype=bool)
 
     # ConvertToNumpyArray takes ~ 0.19 ms, while
     # np.asarray takes ~ 4.69 ms
@@ -135,46 +127,12 @@ class MorganFingerprintTransformer(BaseEstimator, TransformerMixin):
         Returns:
             Array of fingerprints
         """
-
-        my_func = partial(compute_morgan_fingerprints,
-                          fingerprint_length=self.length,
-                          fingerprint_radius=self.radius)
-        fing = _pool.map(my_func, X, chunksize=2048)
-        return np.vstack(fing)
-
-
-def train_model(smiles: List[str], properties: List[float]):
-    """Train a machine learning model using Morgan Fingerprints.
-    
-    Args:
-        smiles: SMILES strings for each molecule
-        properties: List of a property for each molecule
-    Returns:
-        A trained model
-    """
-    # Imports for python functions run remotely must be defined inside the function
-
-    model = Pipeline([
-        ('fingerprint', MorganFingerprintTransformer()),
-        ('knn', KNeighborsRegressor(n_neighbors=4, weights='distance', metric='jaccard', n_jobs=-1))
-        # n_jobs = -1 lets the model run all available processors
-    ])
-
-    return model.fit(smiles, properties)
-
-
-def run_model(model, smiles):
-    """Run a model on a list of smiles strings
-    
-    Args:
-        model: Trained model that takes SMILES strings as inputs
-        smiles: List of molecules to evaluate
-    Returns:
-        A dataframe with the molecules and their predicted outputs
-    """
-    pred_y = model.predict(smiles)
-    return pd.DataFrame({'smiles': smiles, 'ie': pred_y})
-
+        fps = []
+        for x in X: 
+            fps.append(compute_morgan_fingerprints(x, self.length, self.radius))
+            
+        return fps     
+        
 
 if __name__ == "__main__":
     energy = compute_vertical('OC')
