@@ -1,4 +1,4 @@
-name: moldesign-demo
+name: moldesign
 channels:
   - defaults
   - conda-forge
